@@ -1,0 +1,9 @@
+*.img
+*.bin
+*.ppm
+*.png
+*.log
+*.EXE
+*.exe
+*.SAV
+snaps_*/
