@@ -1,0 +1,25 @@
+{
+  "schema": 2,
+  "target": {
+    "name": "VICEROY.EXE",
+    "version": "Sid Meier's Colonization, MS-DOS v3.0 (7-Feb-95)",
+    "size": 494910,
+    "md5_pristine": "0f5d5b0063721fbc6aca314e5a43ddaf"
+  },
+  "patches": [
+    {
+      "id": "traderoute-boycott",
+      "title": "Trade routes deliver boycotted goods again",
+      "status": "recommended",
+      "offset": "0x4121A",
+      "original": "75da",
+      "patched": "9090",
+      "asm_before": "jne 0x411F6",
+      "asm_after": "nop / nop",
+      "md5_alone": "d60ddedbfa17f7058cdbe2bb3873b39e",
+      "conflicts": [],
+      "summary": "Removes the per-cargo skip branch in the carrier unload loop, so an automated trade route no longer refuses to deliver goods boycotted in Europe.",
+      "verified": "50+ turns in DOSBox-Daum; Europe sales and Custom House unaffected; 5-stop/7-cargo route delivers correctly."
+    }
+  ]
+}

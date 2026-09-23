@@ -34,11 +34,14 @@ Nothing else in the file changes.
 | `VICEROY.EXE` original (v3.0, 494,910 bytes) | `0f5d5b0063721fbc6aca314e5a43ddaf` |
 | `VICEROY.EXE` patched | `d60ddedbfa17f7058cdbe2bb3873b39e` |
 
-Apply it with the included patcher, which verifies the checksum before touching
-anything and writes a backup:
+Apply it with the included patcher. It checks every byte at the patch site
+before it writes, keeps a backup named by the file's md5
+(`VICEROY.EXE.0f5d5b00.bak` for the pristine file), and writes atomically:
 
 ```
-python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE
+python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --all
+python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --status
+python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --all --revert
 ```
 
 ## Why that byte

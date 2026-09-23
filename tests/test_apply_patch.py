@@ -1,138 +1,374 @@
-"""Tests for patch/apply_patch.py.
+"""Tests for the patchers in patch/.
 
-Two kinds of test:
+The tests run each patcher as a separate process, the way a user runs it, from
+a temporary folder that holds a copy of the patcher and a patches.json. This
+lets the same tests run against every implementation (see IMPLEMENTATIONS).
 
-* Fake-EXE tests always run. They build a 494,910-byte file of zeros with the
-  expected bytes at the patch site, and override the md5 constants so the
-  patcher accepts it. No game code is needed.
+* Fake-EXE tests always run. They use a file of the right size (494,910 bytes)
+  that holds only the expected bytes at each patch site. No game code needed.
 * Real-EXE tests run only when COL1_PRISTINE_EXE points at an unmodified
-  VICEROY.EXE (md5 0f5d5b0063721fbc6aca314e5a43ddaf). They check the real
-  md5 values end to end.
+  VICEROY.EXE (md5 0f5d5b0063721fbc6aca314e5a43ddaf).
 
 Run:  python3 -m unittest discover -s tests -v
 """
+import copy
 import hashlib
-import io
+import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "patch"))
-import apply_patch as ap  # noqa: E402
-
-
-def fake_exe(site: bytes) -> bytes:
-    data = bytearray(ap.EXPECTED_SIZE)
-    data[ap.OFFSET:ap.OFFSET + 2] = site
-    return bytes(data)
+PATCH_DIR = ROOT / "patch"
+REAL_MANIFEST = json.loads((PATCH_DIR / "patches.json").read_text(encoding="utf-8"))
+SIZE = REAL_MANIFEST["target"]["size"]
+PRISTINE = os.environ.get("COL1_PRISTINE_EXE")
+HAVE_PRISTINE = bool(PRISTINE) and Path(PRISTINE).is_file()
 
 
 def md5(b: bytes) -> str:
     return hashlib.md5(b).hexdigest()
 
 
-class Base(unittest.TestCase):
+def fake_exe(manifest: dict, applied=()) -> bytes:
+    data = bytearray(SIZE)
+    for p in manifest["patches"]:
+        hexval = p["patched"] if p["id"] in applied else p["original"]
+        b = bytes.fromhex(hexval)
+        off = int(p["offset"], 16)
+        data[off:off + len(b)] = b
+    return bytes(data)
+
+
+# Two made-up patches used to test rules the real manifest cannot show yet
+# (experimental status, conflicts). They sit in empty space of the fake EXE.
+def synthetic_manifest() -> dict:
+    m = copy.deepcopy(REAL_MANIFEST)
+    base = dict(asm_before="x", asm_after="y", md5_alone="0" * 32, summary="test", conflicts=[])
+    m["patches"] += [
+        dict(base, id="exp-a", title="A", status="experimental",
+             offset="0x100", original="1111", patched="2222"),
+        dict(base, id="exp-b", title="B", status="experimental",
+             offset="0x200", original="3333", patched="4444", conflicts=["exp-a"]),
+    ]
+    return m
+
+
+class PythonImpl:
+    name = "python"
+    script = "apply_patch.py"
+
+    @staticmethod
+    def argv(script: Path, exe, ids=(), **flags):
+        cmd = [sys.executable, str(script), str(exe), *ids]
+        for flag, on in flags.items():
+            if on:
+                cmd.append("--" + flag.replace("_", "-"))
+        return cmd
+
+
+IMPLEMENTATIONS = [PythonImpl]
+
+
+class PatcherTests:
+    """Mixed into one TestCase per implementation (see bottom of file)."""
+    impl = None
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp)
-        self.exe = self.tmp / "VICEROY.EXE"
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.tool = self.tmp / "tool"
+        self.tool.mkdir()
+        shutil.copy(PATCH_DIR / self.impl.script, self.tool)
+        self.use_manifest(REAL_MANIFEST)
+        self.game = self.tmp / "game"
+        self.game.mkdir()
+        self.exe = self.game / "VICEROY.EXE"
 
-    def run_main(self, *argv):
-        out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(sys, "argv", ["apply_patch.py", *map(str, argv)]), \
-                redirect_stdout(out), redirect_stderr(err):
-            rc = ap.main()
-        return rc, out.getvalue(), err.getvalue()
+    def use_manifest(self, m):
+        (self.tool / "patches.json").write_text(json.dumps(m, indent=2), encoding="utf-8")
 
+    def run_tool(self, ids=(), exe=None, cwd=None, **flags):
+        cmd = self.impl.argv(self.tool / self.impl.script, exe or self.exe, ids, **flags)
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd or self.tmp)
+        return r.returncode, r.stdout, r.stderr
 
-class FakeExeTests(Base):
-    def setUp(self):
-        super().setUp()
-        self.orig = fake_exe(ap.ORIGINAL_BYTES)
-        self.patched = fake_exe(ap.PATCHED_BYTES)
-        for name, val in (("MD5_ORIGINAL", md5(self.orig)),
-                          ("MD5_PATCHED", md5(self.patched))):
-            p = mock.patch.object(ap, name, val)
-            p.start()
-            self.addCleanup(p.stop)
+    def baks(self):
+        return sorted(p.name for p in self.game.glob("*.bak"))
 
-    def test_apply_writes_only_the_two_bytes(self):
-        self.exe.write_bytes(self.orig)
-        rc, _, _ = self.run_main(self.exe)
+    # ---- basic apply / revert -------------------------------------------------
+
+    def test_apply_all_changes_only_patch_bytes(self):
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST))
+        rc, out, err = self.run_tool(all=True)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(REAL_MANIFEST, applied={"traderoute-boycott"}))
+
+    def test_apply_by_id_then_revert(self):
+        orig = fake_exe(REAL_MANIFEST)
+        self.exe.write_bytes(orig)
+        self.assertEqual(self.run_tool(["traderoute-boycott"])[0], 0)
+        self.assertNotEqual(self.exe.read_bytes(), orig)
+        self.assertEqual(self.run_tool(["traderoute-boycott"], revert=True)[0], 0)
+        self.assertEqual(self.exe.read_bytes(), orig)
+
+    def test_second_apply_is_noop_and_makes_no_backup(self):
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST, applied={"traderoute-boycott"}))
+        rc, out, _ = self.run_tool(all=True)
         self.assertEqual(rc, 0)
-        self.assertEqual(self.exe.read_bytes(), self.patched)
+        self.assertIn("Nothing to do", out)
+        self.assertEqual(self.baks(), [])
 
-    def test_apply_makes_backup_of_input(self):
-        self.exe.write_bytes(self.orig)
-        self.run_main(self.exe)
-        self.assertEqual((self.tmp / "VICEROY.EXE.bak").read_bytes(), self.orig)
+    # ---- backups ----------------------------------------------------------------
 
-    def test_apply_twice_is_noop(self):
-        self.exe.write_bytes(self.patched)
-        rc, out, _ = self.run_main(self.exe)
-        self.assertEqual(rc, 0)
-        self.assertIn("already patched", out)
-        self.assertEqual(self.exe.read_bytes(), self.patched)
+    def test_backup_is_named_by_md5_of_input(self):
+        orig = fake_exe(REAL_MANIFEST)
+        self.exe.write_bytes(orig)
+        self.run_tool(all=True)
+        bak = self.game / f"VICEROY.EXE.{md5(orig)[:8]}.bak"
+        self.assertEqual(self.baks(), [bak.name])
+        self.assertEqual(bak.read_bytes(), orig)
 
-    def test_revert_restores_original(self):
-        self.exe.write_bytes(self.patched)
-        rc, _, _ = self.run_main(self.exe, "--revert")
-        self.assertEqual(rc, 0)
-        self.assertEqual(self.exe.read_bytes(), self.orig)
+    def test_each_state_gets_its_own_backup(self):
+        orig = fake_exe(REAL_MANIFEST)
+        self.exe.write_bytes(orig)
+        self.run_tool(all=True)
+        patched = self.exe.read_bytes()
+        self.run_tool(all=True, revert=True)
+        self.assertEqual(sorted(self.baks()),
+                         sorted([f"VICEROY.EXE.{md5(orig)[:8]}.bak",
+                                 f"VICEROY.EXE.{md5(patched)[:8]}.bak"]))
 
-    def test_check_changes_nothing(self):
-        self.exe.write_bytes(self.orig)
-        rc, out, _ = self.run_main(self.exe, "--check")
-        self.assertEqual(rc, 0)
-        self.assertIn("status  : original", out)
-        self.assertEqual(self.exe.read_bytes(), self.orig)
-        self.assertFalse((self.tmp / "VICEROY.EXE.bak").exists())
+    def test_existing_backup_is_not_overwritten(self):
+        orig = fake_exe(REAL_MANIFEST)
+        self.exe.write_bytes(orig)
+        bak = self.game / f"VICEROY.EXE.{md5(orig)[:8]}.bak"
+        bak.write_bytes(b"keep me")
+        self.run_tool(all=True)
+        self.assertEqual(bak.read_bytes(), b"keep me")
 
-    def test_unknown_md5_refused(self):
-        other = bytearray(self.orig)
-        other[0] = 0x4D  # some unrelated byte
-        self.exe.write_bytes(bytes(other))
-        rc, _, err = self.run_main(self.exe)
-        self.assertEqual(rc, 2)
-        self.assertIn("unrecognised", err)
-        self.assertEqual(self.exe.read_bytes(), bytes(other))
+    # ---- refusals ---------------------------------------------------------------
 
-    def test_force_still_checks_site_bytes(self):
-        other = bytearray(self.orig)
-        other[0] = 0x4D
-        other[ap.OFFSET] = 0x11  # wrong byte at the patch site
-        self.exe.write_bytes(bytes(other))
-        rc, _, err = self.run_main(self.exe, "--force")
-        self.assertEqual(rc, 2)
-        self.assertIn("Refusing to write", err)
-        self.assertEqual(self.exe.read_bytes(), bytes(other))
+    def test_unexpected_bytes_refused_and_nothing_written(self):
+        data = bytearray(fake_exe(REAL_MANIFEST))
+        data[0x4121A] = 0x11
+        self.exe.write_bytes(bytes(data))
+        rc, _, err = self.run_tool(all=True)
+        self.assertEqual(rc, 3)
+        self.assertIn("11da", err)
+        self.assertEqual(self.exe.read_bytes(), bytes(data))
+        self.assertEqual(self.baks(), [])
+
+    def test_unexpected_bytes_message_shows_whole_site(self):
+        self.use_manifest(synthetic_manifest())
+        data = bytearray(fake_exe(synthetic_manifest()))
+        data[0x100:0x102] = b"\xab\xcd"
+        self.exe.write_bytes(bytes(data))
+        rc, _, err = self.run_tool(["exp-a"])
+        self.assertEqual(rc, 3)
+        self.assertIn("abcd", err)
+
+    def test_wrong_size_refused(self):
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST) + b"\0")
+        rc, _, err = self.run_tool(all=True)
+        self.assertEqual(rc, 3)
+        self.assertIn("494910", err)
 
     def test_missing_file(self):
-        rc, _, err = self.run_main(self.tmp / "nope.exe")
+        rc, _, err = self.run_tool(all=True, exe=self.game / "nope.exe")
         self.assertEqual(rc, 1)
-        self.assertIn("no such file", err)
+
+    def test_unknown_id(self):
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST))
+        rc, _, err = self.run_tool(["bogus"])
+        self.assertEqual(rc, 2)
+        self.assertIn("bogus", err)
+
+    def test_nothing_selected(self):
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST))
+        self.assertEqual(self.run_tool()[0], 2)
+
+    def test_all_plus_ids_refused(self):
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST))
+        self.assertEqual(self.run_tool(["traderoute-boycott"], all=True)[0], 2)
+
+    # ---- status / list ----------------------------------------------------------
+
+    def test_status_and_check_alias_write_nothing(self):
+        orig = fake_exe(REAL_MANIFEST)
+        self.exe.write_bytes(orig)
+        for flag in ("status", "check"):
+            rc, out, _ = self.run_tool(**{flag: True})
+            self.assertEqual(rc, 0)
+            self.assertIn("traderoute-boycott", out)
+            self.assertIn("not applied", out)
+        self.assertEqual(self.exe.read_bytes(), orig)
+        self.assertEqual(self.baks(), [])
+
+    def test_list_needs_no_valid_exe(self):
+        rc, out, _ = self.run_tool(list=True, exe=self.game / "nope.exe")
+        self.assertEqual(rc, 0)
+        self.assertIn("traderoute-boycott", out)
+
+    # ---- experimental and conflicts -----------------------------------------------
+
+    def test_all_skips_experimental(self):
+        m = synthetic_manifest()
+        self.use_manifest(m)
+        self.exe.write_bytes(fake_exe(m))
+        rc, out, _ = self.run_tool(all=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(m, applied={"traderoute-boycott"}))
+        self.assertIn("exp-a", out)
+
+    def test_experimental_applies_when_named(self):
+        m = synthetic_manifest()
+        self.use_manifest(m)
+        self.exe.write_bytes(fake_exe(m))
+        self.assertEqual(self.run_tool(["exp-a"])[0], 0)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(m, applied={"exp-a"}))
+
+    def test_conflict_declared_on_new_patch(self):
+        m = synthetic_manifest()
+        self.use_manifest(m)
+        self.exe.write_bytes(fake_exe(m, applied={"exp-a"}))
+        rc, _, err = self.run_tool(["exp-b"])
+        self.assertEqual(rc, 5)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(m, applied={"exp-a"}))
+
+    def test_conflict_declared_on_installed_patch(self):
+        m = synthetic_manifest()
+        self.use_manifest(m)
+        self.exe.write_bytes(fake_exe(m, applied={"exp-b"}))
+        self.assertEqual(self.run_tool(["exp-a"])[0], 5)
+
+    def test_conflict_within_one_command(self):
+        m = synthetic_manifest()
+        self.use_manifest(m)
+        self.exe.write_bytes(fake_exe(m))
+        self.assertEqual(self.run_tool(["exp-a", "exp-b"])[0], 5)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(m))
+
+    def test_revert_is_never_blocked_by_conflicts(self):
+        m = synthetic_manifest()
+        self.use_manifest(m)
+        self.exe.write_bytes(fake_exe(m, applied={"exp-a"}))
+        self.assertEqual(self.run_tool(["exp-a"], revert=True)[0], 0)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(m))
+
+    def test_revert_all_includes_experimental(self):
+        m = synthetic_manifest()
+        self.use_manifest(m)
+        self.exe.write_bytes(fake_exe(m, applied={"traderoute-boycott", "exp-a"}))
+        self.assertEqual(self.run_tool(all=True, revert=True)[0], 0)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(m))
+
+    # ---- manifest validation (fail closed) ----------------------------------------
+
+    def assert_manifest_rejected(self, m):
+        self.use_manifest(m)
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST))
+        rc, _, err = self.run_tool(all=True)
+        self.assertEqual(rc, 6, err)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(REAL_MANIFEST))
+
+    def test_manifest_missing_status_rejected(self):
+        m = copy.deepcopy(REAL_MANIFEST)
+        del m["patches"][0]["status"]
+        self.assert_manifest_rejected(m)
+
+    def test_manifest_unknown_status_rejected(self):
+        m = copy.deepcopy(REAL_MANIFEST)
+        m["patches"][0]["status"] = "maybe"
+        self.assert_manifest_rejected(m)
+
+    def test_manifest_length_mismatch_rejected(self):
+        m = copy.deepcopy(REAL_MANIFEST)
+        m["patches"][0]["patched"] = "90"
+        self.assert_manifest_rejected(m)
+
+    def test_manifest_overlap_without_conflict_rejected(self):
+        m = synthetic_manifest()
+        m["patches"][2]["offset"] = "0x101"
+        m["patches"][2]["conflicts"] = []
+        self.assert_manifest_rejected(m)
+
+    def test_manifest_unknown_conflict_id_rejected(self):
+        m = synthetic_manifest()
+        m["patches"][2]["conflicts"] = ["nope"]
+        self.assert_manifest_rejected(m)
+
+    def test_manifest_old_schema_rejected(self):
+        m = copy.deepcopy(REAL_MANIFEST)
+        m["schema"] = 1
+        self.assert_manifest_rejected(m)
+
+    # ---- paths ----------------------------------------------------------------
+
+    def test_relative_path_resolves_from_working_directory(self):
+        orig = fake_exe(REAL_MANIFEST)
+        self.exe.write_bytes(orig)
+        decoy = self.tmp / "VICEROY.EXE"
+        decoy.write_bytes(orig)
+        rc, _, err = self.run_tool(all=True, exe=Path("VICEROY.EXE"), cwd=self.game)
+        self.assertEqual(rc, 0, err)
+        self.assertNotEqual(self.exe.read_bytes(), orig)
+        self.assertEqual(decoy.read_bytes(), orig)
+        self.assertEqual(len(self.baks()), 1)
+
+    def test_path_with_brackets(self):
+        d = self.tmp / "C[1]"
+        d.mkdir()
+        exe = d / "VICEROY.EXE"
+        exe.write_bytes(fake_exe(REAL_MANIFEST))
+        rc, _, err = self.run_tool(all=True, exe=exe)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(exe.read_bytes(), fake_exe(REAL_MANIFEST, applied={"traderoute-boycott"}))
+
+    def test_no_temp_files_left_behind(self):
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST))
+        self.run_tool(all=True)
+        self.assertEqual(sorted(p.name for p in self.game.iterdir()
+                                if not p.name.endswith(".bak")), ["VICEROY.EXE"])
+
+    # ---- the real binary ------------------------------------------------------
+
+    @unittest.skipUnless(HAVE_PRISTINE, "set COL1_PRISTINE_EXE to an unmodified VICEROY.EXE")
+    def test_real_exe_every_patch_matches_md5_alone(self):
+        pristine = Path(PRISTINE).read_bytes()
+        self.assertEqual(md5(pristine), REAL_MANIFEST["target"]["md5_pristine"])
+        for p in REAL_MANIFEST["patches"]:
+            with self.subTest(patch=p["id"]):
+                self.exe.write_bytes(pristine)
+                rc, _, err = self.run_tool([p["id"]])
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(md5(self.exe.read_bytes()), p["md5_alone"])
+                self.run_tool([p["id"]], revert=True)
+                self.assertEqual(md5(self.exe.read_bytes()), REAL_MANIFEST["target"]["md5_pristine"])
 
 
-PRISTINE = os.environ.get("COL1_PRISTINE_EXE")
+class ManifestTests(unittest.TestCase):
+    def test_real_manifest_offsets_are_hex_strings(self):
+        for p in REAL_MANIFEST["patches"]:
+            self.assertTrue(p["offset"].startswith("0x"), p["id"])
+
+    def test_real_manifest_sites_match_pristine_exe(self):
+        if not HAVE_PRISTINE:
+            self.skipTest("set COL1_PRISTINE_EXE")
+        data = Path(PRISTINE).read_bytes()
+        for p in REAL_MANIFEST["patches"]:
+            off = int(p["offset"], 16)
+            orig = bytes.fromhex(p["original"])
+            self.assertEqual(data[off:off + len(orig)], orig, p["id"])
 
 
-@unittest.skipUnless(PRISTINE and Path(PRISTINE).is_file(),
-                     "set COL1_PRISTINE_EXE to an unmodified VICEROY.EXE")
-class RealExeTests(Base):
-    def test_real_md5_round_trip(self):
-        shutil.copy(PRISTINE, self.exe)
-        self.assertEqual(md5(self.exe.read_bytes()), ap.MD5_ORIGINAL)
-        self.assertEqual(self.run_main(self.exe)[0], 0)
-        self.assertEqual(md5(self.exe.read_bytes()), ap.MD5_PATCHED)
-        self.assertEqual(self.run_main(self.exe, "--revert")[0], 0)
-        self.assertEqual(md5(self.exe.read_bytes()), ap.MD5_ORIGINAL)
-
+for _impl in IMPLEMENTATIONS:
+    globals()[f"Test_{_impl.name}"] = type(f"Test_{_impl.name}",
+                                           (PatcherTests, unittest.TestCase), {"impl": _impl})
 
 if __name__ == "__main__":
     unittest.main()
