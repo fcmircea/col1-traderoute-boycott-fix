@@ -1,6 +1,53 @@
-# Colonization (1994) — trade-route boycott drop-off fix
+# Colonization (1994) — binary fixes
 
-A two-byte fix for a 30-year-old bug in **Sid Meier's Colonization**, MS-DOS version 3.0.
+Small, verified binary patches for **Sid Meier's Colonization**, MS-DOS
+version 3.0 (`VICEROY.EXE`, 494,910 bytes, md5 `0f5d5b0063721fbc6aca314e5a43ddaf`).
+Each one was found by runtime measurement, not by guessing.
+
+| patch | offset | status | what it fixes |
+|---|---|---|---|
+| `traderoute-boycott` | `0x4121A` | **recommended** | trade routes silently refuse to deliver boycotted goods |
+| `rng-idle-stir` | `0xC2FD` | experimental | the RNG is reset to the clock about 18 times a second, so battles close in time draw nearly the same number |
+
+`--all` applies only **recommended** patches. You have to name an experimental
+patch to apply it.
+
+## Apply
+
+```
+python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --list
+python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --status
+python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --all
+python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE rng-idle-stir
+python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --all --revert
+```
+
+No Python? `patch/Apply-Patch.ps1` does the same job with the same rules and
+exit codes, on Windows PowerShell 5.1 or PowerShell 7+:
+
+```powershell
+.\patch\Apply-Patch.ps1 "D:\...\COLONIZE\VICEROY.EXE" -Status
+.\patch\Apply-Patch.ps1 "D:\...\COLONIZE\VICEROY.EXE" -All
+.\patch\Apply-Patch.ps1 "D:\...\COLONIZE\VICEROY.EXE" rng-idle-stir
+```
+
+Both patchers:
+
+- check every byte at every patch site before writing, and write nothing if
+  one site is wrong;
+- copy the current file to `VICEROY.EXE.<first 8 of md5>.bak` before each
+  change (the pristine file becomes `VICEROY.EXE.0f5d5b00.bak`). A backup is
+  never overwritten, so every state you had is kept;
+- write to a temporary file and rename it, so an interrupted run cannot leave
+  a half-written EXE;
+- refuse patch combinations that conflict, and never block `--revert`.
+
+Exit codes: 0 ok · 1 file not found · 2 bad command line · 3 unexpected bytes
+or size · 5 conflict · 6 invalid `patches.json`.
+
+---
+
+# Patch 1: trade-route boycott drop-off (`traderoute-boycott`)
 
 ## The bug
 
@@ -33,24 +80,6 @@ Nothing else in the file changes.
 |---|---|
 | `VICEROY.EXE` original (v3.0, 494,910 bytes) | `0f5d5b0063721fbc6aca314e5a43ddaf` |
 | `VICEROY.EXE` patched | `d60ddedbfa17f7058cdbe2bb3873b39e` |
-
-Apply it with the included patcher. It checks every byte at the patch site
-before it writes, keeps a backup named by the file's md5
-(`VICEROY.EXE.0f5d5b00.bak` for the pristine file), and writes atomically:
-
-```
-python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --all
-python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --status
-python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --all --revert
-```
-
-No Python? `patch/Apply-Patch.ps1` does the same job with the same rules and
-exit codes, on Windows PowerShell 5.1 or PowerShell 7+:
-
-```powershell
-.\patch\Apply-Patch.ps1 "D:\...\COLONIZE\VICEROY.EXE" -All
-.\patch\Apply-Patch.ps1 "D:\...\COLONIZE\VICEROY.EXE" -Status
-```
 
 ## Why that byte
 
@@ -101,15 +130,48 @@ In practice the 5-stop / 7-cargo result makes a broader predicate unlikely, but
 if you can name that function precisely, please open an issue and it will be
 corrected here.
 
+---
+
+# Patch 2: battle randomness (`rng-idle-stir`) — experimental
+
+The game's `rand()` is the standard Microsoft C generator and is fine. The
+problem is the **idle loop**: while the game waits for input, it calls
+`srand(tick)` about 18 times a second. That resets the whole RNG state to the
+current tick count, so draws made close in time are close in value.
+
+The patch changes 13 bytes in that idle wrapper so it **adds** the tick into
+the state instead of resetting it. `srand()` itself is left byte-identical,
+because the game uses it on purpose for content that must stay the same
+(colony screen layout, which skill a village teaches).
+
+Measured in QEMU on 2026-09-23 (same save and script for both builds, 40
+samples each):
+
+| | r1 (0 = no correlation) | chi² (pass < 14.07) | high state word = 0 |
+|---|---|---|---|
+| stock | +0.925 | 152.4 | 40 / 40 |
+| patched | +0.060 | 4.8 | 0 / 40 |
+
+**Why experimental:** the play checks are not done yet (colony layout stable
+across visits, village teaching stable turn to turn, new worlds differ).
+Full workings, including the MZ relocation trap this patch has to avoid:
+[docs/RNG-ANALYSIS.md](docs/RNG-ANALYSIS.md).
+
+---
+
 ## Repository contents
 
-- `patch/` — checksum-verified patcher and the raw offset/bytes.
-- `docs/ANALYSIS.md` — the bug mechanism, all confirmed offsets, runtime evidence.
+- `patch/` — `patches.json` (the patch list) and the two patchers.
+- `tests/` — tests for both patchers (`python3 -m unittest discover -s tests`).
+  Set `COL1_PRISTINE_EXE` to your own unmodified `VICEROY.EXE` to also run
+  the real-binary checks (md5 of every patch, `srand()` untouched,
+  relocation audit).
+- `docs/ANALYSIS.md` — the trade-route bug: mechanism, offsets, runtime evidence.
+- `docs/RNG-ANALYSIS.md` — the RNG defect, the patch, and the measurements.
 - `docs/METHOD.md` — how to reproduce the investigation.
 - `docs/DEAD-ENDS.md` — what looked right and wasn't. Read this before re-deriving it.
-- `harness/` — headless QEMU + gdb rig for runtime RE of a DOS game, with
-  hardware watchpoints and scripted save editing. Reusable for other Col1 bugs,
-  and probably for other DOS-era titles.
+- `harness/` — headless QEMU + gdb rig for runtime RE of a DOS game:
+  hardware watchpoints, RNG state sampling, scripted input.
 
 ## Legal
 
