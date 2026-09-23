@@ -7,3 +7,5 @@
 *.exe
 *.SAV
 snaps_*/
+__pycache__/
+*.pyc
