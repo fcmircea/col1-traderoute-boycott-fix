@@ -1,11 +1,12 @@
-# Write-watchpoint on Fort Orange's fur word (env WWATCH, hex linear).
+# Write-watchpoint on one word of guest memory (env WWATCH, hex linear address).
+# Env: HITS_LOG (default hits.log), GDB_PORT (default 1234), GDB_SECONDS (230).
 # Logs every write: CS:IP (the writer instruction), new value, regs, stack.
 import gdb, os, time
-LOG = open('/tmp/hits.log','a',buffering=1)
+LOG = open(os.environ.get('HITS_LOG', 'hits.log'),'a',buffering=1)
 def log(s): LOG.write(s+'\n')
 gdb.execute('set confirm off'); gdb.execute('set pagination off')
 gdb.execute('set architecture i8086')
-gdb.execute('target remote 127.0.0.1:1234')
+gdb.execute(f"target remote 127.0.0.1:{os.environ.get('GDB_PORT', '1234')}")
 addr = int(os.environ['WWATCH'],16)
 gdb.execute(f'watch *(short *)0x{addr:x}')   # write watchpoint
 log(f'ARMED wwatch=0x{addr:x}')
@@ -30,7 +31,7 @@ for i in range(8000):
         try: code=bytes(inf.read_memory(lin-16,48)).hex()
         except Exception: code='??'
         log(f'HIT {i} t={time.time()-t0:.1f} CS={cs:04x} IP={eip:04x} LIN={lin:05x} '
-            f'DS={ds:04x} newFUR={nv} AX={ax:04x} BX={bx:04x} CX={cx:04x} DX={dx:04x} '
+            f'DS={ds:04x} new={nv} AX={ax:04x} BX={bx:04x} CX={cx:04x} DX={dx:04x} '
             f'SI={si:04x} DI={di:04x} BP={bp:04x} SS:SP={ss:04x}:{esp:04x} CODE={code} STACK={stack}')
     except Exception as e:
         log(f'LOG-ERR {i} {e}')

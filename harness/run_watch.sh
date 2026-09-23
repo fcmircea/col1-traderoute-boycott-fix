@@ -1,59 +1,92 @@
 #!/bin/bash
 # One-shot: boot, load the first save, locate a colony's commodity word, attach
-# gdb with a watchpoint on it, then drive turns until it fires.
+# gdb with a watchpoint on it, then drive turns until the time runs out.
 #
-#   ./run_watch.sh chd.img colboot.img out-tag
+#   ./run_watch.sh disk.img boot-floppy.img out-tag
 #
-# Must run inside a SINGLE invocation - the VM cannot survive between calls.
-# Allow ~5 minutes.
-set -u
-IMG=${1:?disk image}; FLOPPY=${2:?boot floppy}; TAG=${3:-run}
+# Writes hits_<tag>.log and snaps_<tag>/ in the current folder.
+#
+# The floppy must start the game by itself (make_boot_floppy.sh).
+# Must run inside a SINGLE invocation: the VM does not survive between calls.
+# Allow about 5 minutes. Only the QEMU started here is killed.
+#
+# Environment (defaults in brackets):
+#   QEMU         qemu-system-i386 binary          [qemu-system-i386]
+#   WATCH        gdb script: write or read         [write]
+#   GDB_SECONDS  how long to drive the game        [230]
+#   GDB_PORT     gdb stub port                     [1234]
+#   BOOT_WAIT    seconds from power-on to menu     [47]
+#   SCAN_ARGS    extra args for scan_stock.py      []
+set -euo pipefail
+IMG=${1:?usage: run_watch.sh <disk.img> <floppy.img> <tag>}
+FLOPPY=${2:?usage: run_watch.sh <disk.img> <floppy.img> <tag>}
+TAG=${3:-run}
 QEMU=${QEMU:-qemu-system-i386}
+WATCH=${WATCH:-write}
+GDB_SECONDS=${GDB_SECONDS:-230}
+GDB_PORT=${GDB_PORT:-1234}
+BOOT_WAIT=${BOOT_WAIT:-47}
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-rm -f /tmp/hits.log /tmp/qmon.sock /tmp/cur.ppm
-rm -rf "snaps_$TAG"; mkdir -p "snaps_$TAG"
-pkill -9 -f qemu-system-i386 2>/dev/null; sleep 2
+OUTDIR=$(pwd)
+SNAPS="$OUTDIR/snaps_$TAG"
+HITS="$OUTDIR/hits_$TAG.log"
+WORK=$(mktemp -d)
+SOCK="$WORK/qmon.sock"
+QPID= ; GPID=
+cleanup() {
+  for p in $GPID $QPID; do kill -9 "$p" 2>/dev/null || true; done
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 
-$QEMU -m 16 \
-  -drive file="$FLOPPY",format=raw,if=floppy \
-  -drive file="$IMG",format=raw,if=ide,index=0,media=disk \
+rm -rf "$SNAPS"; mkdir -p "$SNAPS"; : > "$HITS"
+cp "$IMG" "$WORK/disk.img"; cp "$FLOPPY" "$WORK/floppy.img"
+
+"$QEMU" -m 16 \
+  -drive file="$WORK/floppy.img",format=raw,if=floppy \
+  -drive file="$WORK/disk.img",format=raw,if=ide,index=0,media=disk \
   -boot a -display none \
-  -monitor unix:/tmp/qmon.sock,server,nowait 2>/dev/null &
+  -monitor unix:"$SOCK",server,nowait 2>"$WORK/qemu.err" &
 QPID=$!
 
 # NOTE: the space in "-T 4" is required. "-T4" silently does nothing.
-M(){ printf '%s\n' "$1" | socat -T 4 - unix-connect:/tmp/qmon.sock >/dev/null 2>&1; }
-snap(){ M "screendump /tmp/s.ppm"; sleep 0.6; cp -f /tmp/s.ppm "snaps_$TAG/$1.ppm" 2>/dev/null; }
-grab(){ M 'screendump "/tmp/cur.ppm"'; sleep 0.5; }
+M(){ printf '%s\n' "$1" | socat -T 4 - unix-connect:"$SOCK" >/dev/null 2>&1 || true; }
+snap(){ M "screendump \"$WORK/s.ppm\""; sleep 0.6; cp -f "$WORK/s.ppm" "$SNAPS/$1.ppm" 2>/dev/null || true; }
+grab(){ M "screendump \"$WORK/cur.ppm\""; sleep 0.5; }
 
-sleep 47                                   # boot + straight to main menu
+sleep "$BOOT_WAIT"
+kill -0 "$QPID" 2>/dev/null || { echo "qemu died:" >&2; cat "$WORK/qemu.err" >&2; exit 1; }
 M 'sendkey down'; sleep .6
 M 'sendkey down'; sleep .6
 M 'sendkey down'; sleep .6
 M 'sendkey ret';  sleep 4                  # LOAD Game
 M 'sendkey ret';  sleep 11                 # first save slot
-# the load confirmation is click-to-dismiss; centre is forgiving
+# the load confirmation is click-to-dismiss; the centre is forgiving
 M 'mouse_move -3000 -3000'; sleep .4
 M 'mouse_move 320 200';     sleep .4
 M 'mouse_button 1'; sleep .3; M 'mouse_button 0'; sleep 2
 snap 00_loaded
 
 # addresses move every run - always re-locate
-M 'pmemsave 0 0x100000 "/tmp/mem.bin"'; sleep 4
-ADDR=$(python3 "$HERE/scan_stock.py" /tmp/mem.bin) || { echo "locate failed"; kill -9 $QPID; exit 1; }
-echo "watching $ADDR"
+M "pmemsave 0 0x100000 \"$WORK/mem.bin\""; sleep 4
+# shellcheck disable=SC2086
+ADDR=$(python3 "$HERE/scan_stock.py" "$WORK/mem.bin" ${SCAN_ARGS:-}) || { echo "locate failed" >&2; exit 1; }
+echo "watching $ADDR" >&2
 
-M 'gdbserver'; sleep 2
-WWATCH=$ADDR GDB_SECONDS=230 gdb -q -batch -x "$HERE/gdb_watch_write.py" >/tmp/gdb.out 2>&1 &
+M "gdbserver tcp::$GDB_PORT"; sleep 2
+WWATCH=$ADDR HITS_LOG="$HITS" GDB_PORT=$GDB_PORT GDB_SECONDS=$GDB_SECONDS \
+  gdb -q -batch -x "$HERE/gdb_watch_$WATCH.py" >"$WORK/gdb.out" 2>&1 &
+GPID=$!
 
-# SPACE only. ret/Escape/map clicks derail the game (see docs/DEAD-ENDS.md).
+# SPACE only. Enter, Escape and map clicks derail the game (docs/DEAD-ENDS.md).
 START=$(date +%s); n=0
-while [ $(( $(date +%s) - START )) -lt 230 ]; do
-  grep -q GDB-DONE /tmp/hits.log 2>/dev/null && break
+while [ $(( $(date +%s) - START )) -lt "$GDB_SECONDS" ]; do
+  grep -q GDB-DONE "$HITS" 2>/dev/null && break
   grab
-  if [ "$(python3 "$HERE/detect_popup.py" /tmp/cur.ppm 2>/dev/null | cut -d' ' -f1)" = "POPUP" ]; then
-    Y=$(python3 "$HERE/detect_popup.py" /tmp/cur.ppm 2>/dev/null | cut -d' ' -f2)
+  POP=$(python3 "$HERE/detect_popup.py" "$WORK/cur.ppm" 2>/dev/null || echo NOPOPUP)
+  if [ "${POP%% *}" = "POPUP" ]; then
+    Y=${POP#* }
     M 'mouse_move -3000 -3000'; sleep .3; M "mouse_move 150 $Y"; sleep .3
     M 'mouse_button 1'; sleep .2; M 'mouse_button 0'; sleep .4
   else
@@ -64,9 +97,8 @@ while [ $(( $(date +%s) - START )) -lt 230 ]; do
 done
 
 snap 99_final
-M quit; sleep 1; pkill -9 -f qemu-system-i386 2>/dev/null
-cp -f /tmp/hits.log "hits_$TAG.log" 2>/dev/null
-for f in "snaps_$TAG"/*.ppm; do convert "$f" "${f%.ppm}.png" 2>/dev/null; done
+M quit; sleep 1
+for f in "$SNAPS"/*.ppm; do convert "$f" "${f%.ppm}.png" 2>/dev/null && rm -f "$f"; done
 
-echo "=== writes observed ==="
-grep '^HIT' "hits_$TAG.log" 2>/dev/null | sed 's/ CODE=.*//' || echo "none"
+echo "=== hits ($HITS) ==="
+grep -E '^(HIT|READ|ARMED|SUMMARY)' "$HITS" | sed 's/ CODE=.*//' || echo "none"

@@ -1,12 +1,13 @@
 # Read-watchpoint on the fur word. Logs every READER instruction (IP + code).
 # The unload handler reads the fur stock (mov ax,[bx+si+0x9a]) at file 0x2a80e/0x2a870
 # just before depositing; if those readers appear in the broken case, the handler
-# was ENTERED but skipped the write (=> caller-flag bug). Env WWATCH.
+# was ENTERED but skipped the write (=> caller-flag bug).
+# Env: WWATCH (hex linear address), HITS_LOG (default hits.log), GDB_PORT (1234), GDB_SECONDS (230).
 import gdb, os, time
-LOG=open('/tmp/hits.log','a',buffering=1)
+LOG=open(os.environ.get('HITS_LOG', 'hits.log'),'a',buffering=1)
 def log(s): LOG.write(s+'\n')
 gdb.execute('set confirm off'); gdb.execute('set pagination off')
-gdb.execute('set architecture i8086'); gdb.execute('target remote 127.0.0.1:1234')
+gdb.execute('set architecture i8086'); gdb.execute(f"target remote 127.0.0.1:{os.environ.get('GDB_PORT', '1234')}")
 addr=int(os.environ['WWATCH'],16)
 gdb.execute(f'rwatch *(short *)0x{addr:x}')
 log(f'ARMED rwatch=0x{addr:x}')

@@ -64,6 +64,8 @@ SHELL=\FREEDOS\BIN\COMMAND.COM \FREEDOS\BIN /E:512 /P=\FDAUTO.BAT
 ```
 
 `FDAUTO.BAT` loads the mouse driver, then `C:` / `cd COLONIZE` / `VICEROY`.
+If your floppy stops at the prompt instead, `harness/make_boot_floppy.sh` makes
+a copy with those three lines added.
 
 ## Game disk
 
