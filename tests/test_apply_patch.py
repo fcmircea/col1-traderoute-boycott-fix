@@ -71,7 +71,24 @@ class PythonImpl:
         return cmd
 
 
-IMPLEMENTATIONS = [PythonImpl]
+class PowerShellImpl:
+    name = "powershell"
+    script = "Apply-Patch.ps1"
+    FLAGS = {"all": "-All", "revert": "-Revert", "list": "-List",
+             "status": "-Status", "check": "-Check", "force": "-Force"}
+
+    @classmethod
+    def argv(cls, script: Path, exe, ids=(), **flags):
+        cmd = [PWSH, "-NoProfile", "-NonInteractive", "-File", str(script), str(exe), *ids]
+        cmd += [cls.FLAGS[f] for f, on in flags.items() if on]
+        return cmd
+
+
+# COL1_PWSH picks the shell, e.g. "powershell" for Windows PowerShell 5.1.
+PWSH = shutil.which(os.environ.get("COL1_PWSH", "")) or shutil.which("pwsh") or shutil.which("powershell")
+IMPLEMENTATIONS = [PythonImpl] + ([PowerShellImpl] if PWSH else [])
+if not PWSH:
+    print("note: pwsh not found; PowerShell patcher not tested", file=sys.stderr)
 
 
 class PatcherTests:
@@ -349,6 +366,31 @@ class PatcherTests:
                 self.assertEqual(md5(self.exe.read_bytes()), p["md5_alone"])
                 self.run_tool([p["id"]], revert=True)
                 self.assertEqual(md5(self.exe.read_bytes()), REAL_MANIFEST["target"]["md5_pristine"])
+
+
+@unittest.skipUnless(PWSH, "pwsh not found")
+class PowerShellOnlyTests(unittest.TestCase):
+    """Traps that exist only in PowerShell."""
+
+    def test_set_location_differs_from_process_folder(self):
+        # Old bug: Test-Path used the PowerShell location, [IO.File] used the
+        # process folder, so the backup landed in one place and the patch in
+        # another file.
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        game, other = tmp / "game", tmp / "other"
+        game.mkdir(); other.mkdir()
+        orig = fake_exe(REAL_MANIFEST)
+        (game / "VICEROY.EXE").write_bytes(orig)
+        (other / "VICEROY.EXE").write_bytes(orig)
+        script = PATCH_DIR / "Apply-Patch.ps1"
+        cmd = [PWSH, "-NoProfile", "-NonInteractive", "-Command",
+               f"Set-Location -LiteralPath '{game}'; & '{script}' VICEROY.EXE -All; exit $LASTEXITCODE"]
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=other)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotEqual((game / "VICEROY.EXE").read_bytes(), orig)
+        self.assertEqual((other / "VICEROY.EXE").read_bytes(), orig)
+        self.assertEqual(list(other.glob("*.bak")), [])
 
 
 class ManifestTests(unittest.TestCase):

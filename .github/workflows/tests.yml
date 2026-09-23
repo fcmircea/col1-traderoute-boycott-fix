@@ -1,0 +1,24 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: pwsh          # PowerShell 7
+          - os: windows-latest
+            shell: pwsh          # PowerShell 7 on Windows
+          - os: windows-latest
+            shell: powershell    # Windows PowerShell 5.1
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Unit tests (fake EXE; no game files in CI)
+        env:
+          COL1_PWSH: ${{ matrix.shell }}
+        run: python -m unittest discover -s tests -v

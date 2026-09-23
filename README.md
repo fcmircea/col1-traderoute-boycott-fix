@@ -44,6 +44,14 @@ python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --status
 python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --all --revert
 ```
 
+No Python? `patch/Apply-Patch.ps1` does the same job with the same rules and
+exit codes, on Windows PowerShell 5.1 or PowerShell 7+:
+
+```powershell
+.\patch\Apply-Patch.ps1 "D:\...\COLONIZE\VICEROY.EXE" -All
+.\patch\Apply-Patch.ps1 "D:\...\COLONIZE\VICEROY.EXE" -Status
+```
+
 ## Why that byte
 
 The cargo drop-off is a loop over the carrier's cargo items:
