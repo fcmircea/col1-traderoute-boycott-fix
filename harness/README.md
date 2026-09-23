@@ -20,3 +20,23 @@ are.
 
 You supply the boot floppy (FreeDOS 1.4 + `HIMEM.EXE` + `CTMOUSE.EXE`; layout in
 `METHOD.md`) and your own copy of the game.
+
+## RNG tooling
+
+| file | what it does |
+|---|---|
+| `make_boot_floppy.sh` | copies a boot floppy and makes it start `VICEROY.EXE` by itself |
+| `sample_rng_state.sh` | samples the LCG state through the QEMU monitor at **full speed** |
+| `rng_stats.py` | turns samples into next-draw statistics (r1, chi², gap, range) |
+
+```
+make_disk.sh      COLONIZE/ disk.img
+make_boot_floppy.sh colboot.img boot.img
+QEMU=/path/to/qemu-system-i386 sample_rng_state.sh disk.img boot.img run.tsv
+rng_stats.py run.tsv
+```
+
+Sample, do not trap. A breakpoint on anything in the idle loop fires about
+1,000 times a second, and QEMU freezes guest time on every trap. The tick
+counter stops, the game stops advancing, and every sample looks the same. Reading
+memory through the monitor changes nothing in the guest.

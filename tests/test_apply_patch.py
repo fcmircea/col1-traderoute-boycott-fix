@@ -46,6 +46,10 @@ def fake_exe(manifest: dict, applied=()) -> bytes:
 
 # Two made-up patches used to test rules the real manifest cannot show yet
 # (experimental status, conflicts). They sit in empty space of the fake EXE.
+def by_id(m: dict, pid: str) -> dict:
+    return next(p for p in m["patches"] if p["id"] == pid)
+
+
 def synthetic_manifest() -> dict:
     m = copy.deepcopy(REAL_MANIFEST)
     base = dict(asm_before="x", asm_after="y", md5_alone="0" * 32, summary="test", conflicts=[])
@@ -295,28 +299,28 @@ class PatcherTests:
 
     def test_manifest_missing_status_rejected(self):
         m = copy.deepcopy(REAL_MANIFEST)
-        del m["patches"][0]["status"]
+        del by_id(m, "traderoute-boycott")["status"]
         self.assert_manifest_rejected(m)
 
     def test_manifest_unknown_status_rejected(self):
         m = copy.deepcopy(REAL_MANIFEST)
-        m["patches"][0]["status"] = "maybe"
+        by_id(m, "traderoute-boycott")["status"] = "maybe"
         self.assert_manifest_rejected(m)
 
     def test_manifest_length_mismatch_rejected(self):
         m = copy.deepcopy(REAL_MANIFEST)
-        m["patches"][0]["patched"] = "90"
+        by_id(m, "traderoute-boycott")["patched"] = "90"
         self.assert_manifest_rejected(m)
 
     def test_manifest_overlap_without_conflict_rejected(self):
         m = synthetic_manifest()
-        m["patches"][2]["offset"] = "0x101"
-        m["patches"][2]["conflicts"] = []
+        by_id(m, "exp-b")["offset"] = "0x101"
+        by_id(m, "exp-b")["conflicts"] = []
         self.assert_manifest_rejected(m)
 
     def test_manifest_unknown_conflict_id_rejected(self):
         m = synthetic_manifest()
-        m["patches"][2]["conflicts"] = ["nope"]
+        by_id(m, "exp-b")["conflicts"] = ["nope"]
         self.assert_manifest_rejected(m)
 
     def test_manifest_old_schema_rejected(self):
@@ -406,6 +410,60 @@ class ManifestTests(unittest.TestCase):
             off = int(p["offset"], 16)
             orig = bytes.fromhex(p["original"])
             self.assertEqual(data[off:off + len(orig)], orig, p["id"])
+
+
+@unittest.skipUnless(HAVE_PRISTINE, "set COL1_PRISTINE_EXE to an unmodified VICEROY.EXE")
+class RealBinaryStaticTests(unittest.TestCase):
+    """Static facts about the patches, checked on the real VICEROY.EXE."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.data = Path(PRISTINE).read_bytes()
+
+    def relocated_words(self):
+        """File offsets of every word the DOS loader rewrites (MZ relocations)."""
+        d = self.data
+        count = int.from_bytes(d[6:8], "little")
+        table = int.from_bytes(d[0x18:0x1A], "little")
+        header = int.from_bytes(d[8:10], "little") * 16
+        out = {}
+        for i in range(count):
+            off = int.from_bytes(d[table + 4 * i:table + 4 * i + 2], "little")
+            seg = int.from_bytes(d[table + 4 * i + 2:table + 4 * i + 4], "little")
+            out[header + seg * 16 + off] = i
+        return out
+
+    def test_no_patch_touches_srand(self):
+        # srand() at 0x103C2..0x103D3 zeroes the high state word; that is what
+        # makes seeded content (colony layout, village teaching) reproducible.
+        for p in REAL_MANIFEST["patches"]:
+            off = int(p["offset"], 16)
+            end = off + len(bytes.fromhex(p["original"]))
+            self.assertTrue(end <= 0x103C2 or off >= 0x103D4, p["id"])
+
+    def test_relocations_inside_patch_sites_are_the_known_ones(self):
+        # A relocated word inside a patch site is rewritten by the loader, so
+        # it must never be executed. Each one here has been checked by hand;
+        # a new entry means a new patch needs the same check.
+        known = {("rng-idle-stir", 0xC304): 523}   # jumped over: 0xC301 jmp -> 0xC306
+        relocs = self.relocated_words()
+        found = {}
+        for p in REAL_MANIFEST["patches"]:
+            off = int(p["offset"], 16)
+            end = off + len(bytes.fromhex(p["original"]))
+            for w, idx in relocs.items():
+                if w < end and w + 2 > off:
+                    found[(p["id"], w)] = idx
+        self.assertEqual(found, known)
+
+    def test_all_patches_together_match_live_install(self):
+        # boycott + idle-stir is what Florin's install ran on 2026-09-23.
+        d = bytearray(self.data)
+        for p in REAL_MANIFEST["patches"]:
+            off = int(p["offset"], 16)
+            new = bytes.fromhex(p["patched"])
+            d[off:off + len(new)] = new
+        self.assertEqual(md5(bytes(d)), "7289494e2ba2561792092a5918d075bd")
 
 
 for _impl in IMPLEMENTATIONS:

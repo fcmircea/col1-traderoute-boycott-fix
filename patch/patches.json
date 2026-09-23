@@ -20,6 +20,21 @@
       "conflicts": [],
       "summary": "Removes the per-cargo skip branch in the carrier unload loop, so an automated trade route no longer refuses to deliver goods boycotted in Europe.",
       "verified": "50+ turns in DOSBox-Daum; Europe sales and Custom House unaffected; 5-stop/7-cargo route delivers correctly."
+    },
+    {
+      "id": "rng-idle-stir",
+      "title": "Stop the idle loop flattening the RNG (battle randomness)",
+      "status": "experimental",
+      "offset": "0xC2FD",
+      "original": "80e47f509af20d1d0d83c402cb",
+      "patched": "0106ee28eb03900000cb909090",
+      "asm_before": "and ah,0x7F / push ax / lcall srand / add sp,2 / retf",
+      "asm_after": "add [0x28EE],ax / jmp 0xC306 / (3 dead bytes) / retf / nop x3",
+      "md5_alone": "9aae37e05aa0c657af3cd5287b248e14",
+      "conflicts": [],
+      "summary": "The idle loop calls srand(tick) about 18 times a second, which resets the RNG state to a small, slowly rising number, so events close in time draw nearly the same value. This patch makes the idle loop ADD the tick into the state instead. srand() itself is left byte-identical, so content that seeds explicitly (colony layout, village teaching, start placement) is unchanged by construction.",
+      "caveat": "Experimental. Static checks and emulator measurements only; play checks (colony layout stable, village teaching stable turn to turn, new worlds differ) not yet redone.",
+      "notes": "MZ relocation entry 523 points at file 0xC304 (segment word of the original srand call); the DOS loader rewrites it at load time. The patch jumps from 0xC301 to 0xC306 over it."
     }
   ]
 }
