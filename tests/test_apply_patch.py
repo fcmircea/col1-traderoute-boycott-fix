@@ -456,14 +456,25 @@ class RealBinaryStaticTests(unittest.TestCase):
                     found[(p["id"], w)] = idx
         self.assertEqual(found, known)
 
-    def test_all_patches_together_match_live_install(self):
+    def test_boycott_and_idle_stir_match_live_install(self):
         # boycott + idle-stir is what Florin's install ran on 2026-09-23.
         d = bytearray(self.data)
-        for p in REAL_MANIFEST["patches"]:
+        for pid in ("traderoute-boycott", "rng-idle-stir"):
+            p = by_id(REAL_MANIFEST, pid)
             off = int(p["offset"], 16)
             new = bytes.fromhex(p["patched"])
             d[off:off + len(new)] = new
         self.assertEqual(md5(bytes(d)), "7289494e2ba2561792092a5918d075bd")
+
+    def test_boycott_and_topup_match_qemu_test_exe(self):
+        # boycott + topup is the EXE measured in QEMU on 2026-09-24 (run X).
+        d = bytearray(self.data)
+        for pid in ("traderoute-boycott", "traderoute-topup"):
+            p = by_id(REAL_MANIFEST, pid)
+            off = int(p["offset"], 16)
+            new = bytes.fromhex(p["patched"])
+            d[off:off + len(new)] = new
+        self.assertEqual(md5(bytes(d)), "f827c0bdd89a27de811941315b027c14")
 
 
 for _impl in IMPLEMENTATIONS:
