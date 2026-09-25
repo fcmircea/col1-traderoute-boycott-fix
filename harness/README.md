@@ -13,6 +13,8 @@ signature in `scan_stock.py`.
 | `gdb_watch_write.py` | gdb script: write-watchpoint, logs `CS:IP`, registers, stack, code bytes |
 | `gdb_watch_read.py` | same, read-watchpoint — use it to prove a routine is *never entered* |
 | `detect_popup.py` | detects the click-to-dismiss colony-arrival popup from a screenshot |
+| `run_probe.sh` | boot → load → SPACE through turns, decoding a trade-route carrier from RAM every 6 steps (no gdb) |
+| `decode_route.py` | finds the unit and colony tables in a RAM dump by signature; prints a carrier's holds and colony stock |
 
 Read `../docs/METHOD.md` first, and `../docs/DEAD-ENDS.md` before debugging the
 harness itself — several failure modes look like something other than what they

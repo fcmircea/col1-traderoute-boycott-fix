@@ -7,6 +7,7 @@ Each one was found by runtime measurement, not by guessing.
 | patch | offset | status | what it fixes |
 |---|---|---|---|
 | `traderoute-boycott` | `0x4121A` | **recommended** | trade routes silently refuse to deliver boycotted goods |
+| `traderoute-topup` | `0x41384` | experimental | a later pick-up stop on a route loads nothing when every hold is in use, even part-full |
 | `rng-idle-stir` | `0xC2FD` | experimental | the RNG is reset to the clock about 18 times a second, so battles close in time draw nearly the same number |
 
 `--all` applies only **recommended** patches. You have to name an experimental
@@ -51,9 +52,9 @@ or size · 5 conflict · 6 invalid `patches.json`.
 
 ## The bug
 
-Trade routes automate cargo carriers between New World colonies. Europe is not a
-valid trade-route stop, so a purely domestic transfer should have nothing to do
-with European trade policy.
+Trade routes automate cargo carriers between colonies. A delivery from one
+colony to another is a domestic transfer, so it should have nothing to do with
+European trade policy.
 
 It does. Once a good is **boycotted** — after refusing the King's tax demand —
 a trade route silently stops delivering that good. The carrier picks the cargo
@@ -88,11 +89,12 @@ The cargo drop-off is a loop over the carrier's cargo items:
 ```
 i = 0
 while i < cargo_count:
-    item = get_cargo(i)                 ; lcall 1a1f:021c
-    if skip_test(item) != 0:
+    good = unload_list_get(i)           ; lcall 1a1f:021c
+    if skip_test(good) != 0:
         i++ ; continue                  ; 0x4121A: jne 0x411F6   <-- removed
-    unload(item, colony)                ; lcall 181f:0c2c
-    ...
+    while find_hold(unit, good) >= 0:   ; lcall 181f:0c2c
+        unload(unit, good, 0)           ; lcall 191f:0594
+    i++
 ```
 
 The boycott does not make the unload routine *refuse*. It makes this caller
@@ -159,6 +161,38 @@ Full workings, including the MZ relocation trap this patch has to avoid:
 
 ---
 
+# Patch 3: part-full holds on a route (`traderoute-topup`) — experimental
+
+Not a boycott bug, though it looks like one. On a route with two pick-up stops,
+the second stop loads nothing if the first stop put something in **every**
+hold, even if a hold is only part full. Example: a caravel takes 124 sugar at
+the first stop (100 + 24), then passes a colony with 100 sugar and takes none.
+
+The colony load loop checks "holds in use == capacity" before it tries to load:
+
+```
+0x41384:  74 03   je 0x41389     ->   90 90   nop / nop
+```
+
+With the check removed, the load call fills up the part-full hold and stops
+the loop by itself when nothing more fits. Europe stops use a different path
+and are not changed.
+
+Measured in QEMU on 2026-09-24 (6 runs, one-bit differential on the boycott,
+plus controls): the boycott makes no difference; with the patch the second
+stop fills 24 → 100; a ship full of another good loads nothing and the game
+does not hang; a 24-turn run topped up in all 6 cycles. Details: [docs/ANALYSIS.md](docs/ANALYSIS.md#second-bug-a-later-pick-up-stop-is-skipped-traderoute-topup).
+
+**Why experimental:** tested on one sea route only, in QEMU. Wagon trains and a
+long session in a real game are not tested yet.
+
+| | MD5 |
+|---|---|
+| original + `traderoute-topup` only | `f5399c8b96e37bd5b3c778fbae781b25` |
+| original + `traderoute-boycott` + `traderoute-topup` | `f827c0bdd89a27de811941315b027c14` |
+
+---
+
 ## Repository contents
 
 - `patch/` — `patches.json` (the patch list) and the two patchers.
@@ -166,7 +200,9 @@ Full workings, including the MZ relocation trap this patch has to avoid:
   Set `COL1_PRISTINE_EXE` to your own unmodified `VICEROY.EXE` to also run
   the real-binary checks (md5 of every patch, `srand()` untouched,
   relocation audit).
-- `docs/ANALYSIS.md` — the trade-route bug: mechanism, offsets, runtime evidence.
+- `docs/ANALYSIS.md` — the two trade-route bugs: mechanism, offsets, runtime evidence.
+- `docs/data/` — raw measurement logs.
+- `docs/sessions/` — session logs.
 - `docs/RNG-ANALYSIS.md` — the RNG defect, the patch, and the measurements.
 - `docs/METHOD.md` — how to reproduce the investigation.
 - `docs/DEAD-ENDS.md` — what looked right and wasn't. Read this before re-deriving it.
