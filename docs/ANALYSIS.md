@@ -217,6 +217,23 @@ turns, 2 route cycles), RAM read every 6 steps with
 | E | X + stop 1 loads horses (both holds 100 horses) | loads nothing, no hang, 3 cycles |
 | XL | as X, 1200 s (about 24 turns) | 6 cycles, tops up every time (24 → 72, 24 → 48), no hang |
 
+Wagon train, land route (runs W0 / W1, 600 s, about 12 trips each). Unit 1
+was changed to a wagon train on a 2-stop land route: load cotton at Isabella
+(105 cotton), then load cotton at Veracruz (60 cotton). Cotton is not
+boycotted. The wagon leaves Isabella with 100 + 5.
+
+| run | EXE | at Veracruz |
+|---|---|---|
+| W0 | boycott patch only | wagon stays 100 + 5; Veracruz keeps 60 on every visit |
+| W1 | + `traderoute-topup` | 5 → 65, Veracruz 60 → 0; later visits load nothing (no stock), no hang |
+
+So the same gate stops wagon trains, and the patch fixes it for them too.
+
+Building that save needed one more field: unit byte `+0x17` holds the route
+(low nibble, read at `0x75D4`) and the current stop, counted from 0 (high
+nibble, read at `0x75FE`). A stop number past the end of the route reads an
+empty stop, whose colony index 0 sends the unit to colony 0.
+
 The boycott has no effect: boy and nob match, and C and D (both with sugar
 boycotted) load at Veracruz when a hold is free. The weight table row for
 Spain was the same in boy and nob.
@@ -231,8 +248,7 @@ the gate is gone.
 0x41384:  74 03   je 0x41389     ->   90 90   nop / nop
 ```
 
-Not yet tested: wagon trains (same code, land routes) and a long play session
-in a real game.
+Not yet tested: a long play session in a real game (DOSBox).
 
 ## Open question
 

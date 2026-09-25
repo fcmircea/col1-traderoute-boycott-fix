@@ -54,3 +54,14 @@ See docs/ANALYSIS.md "Second bug" and docs/data/traderoute-2026-09-24/.
 - Wagon-train route test; long session in a real game (DOSBox).
 - skip_test (191f:0cd8) still not named.
 - Live EXE not touched.
+
+## Follow-up 2026-09-25: wagon train
+- Save: unit 1 made a wagon train (type 12), route 0 made a land route:
+  Isabella load cotton -> Veracruz load cotton. Isabella cotton 105,
+  Veracruz cotton 60, Spain's unit counts adjusted. Built with
+  pavelbel/smcol_saves_utility, then checked byte by byte.
+- First two tries sent the wagon to New Amsterdam: unit +0x17 = 0x20 means
+  route 0, stop 2, and the new route has only 2 stops. Set to 0x00.
+- W0 (boycott patch): Veracruz keeps 60 on every visit (about 12 trips).
+- W1 (+ topup): 5 -> 65 on the first visit, Veracruz 0; no hang.
+- Left to do before "recommended": a long session in a real game (DOSBox).

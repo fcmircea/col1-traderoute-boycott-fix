@@ -183,8 +183,8 @@ plus controls): the boycott makes no difference; with the patch the second
 stop fills 24 → 100; a ship full of another good loads nothing and the game
 does not hang; a 24-turn run topped up in all 6 cycles. Details: [docs/ANALYSIS.md](docs/ANALYSIS.md#second-bug-a-later-pick-up-stop-is-skipped-traderoute-topup).
 
-**Why experimental:** tested on one sea route only, in QEMU. Wagon trains and a
-long session in a real game are not tested yet.
+**Why experimental:** tested in QEMU only, on one sea route and one
+wagon-train land route. A long session in a real game is not done yet.
 
 | | MD5 |
 |---|---|
