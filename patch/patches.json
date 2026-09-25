@@ -33,7 +33,7 @@
       "md5_alone": "f5399c8b96e37bd5b3c778fbae781b25",
       "conflicts": [],
       "summary": "The colony load loop first checks 'every hold used' and, if so, loads nothing, even when a hold is only part full. On a route with two pick-up stops, the second stop is skipped when the first one put something in every hold. This patch removes that check; the load call itself tops up a part-full hold and stops the loop when nothing more fits.",
-      "caveat": "Experimental. Measured in QEMU on one sea route (see docs/ANALYSIS.md, 'Second bug'). Not yet tested with wagon trains or in a long play session.",
+      "caveat": "Experimental. Measured in QEMU on one sea route and one wagon-train land route (see docs/ANALYSIS.md, 'Second bug'). Not yet tested in a long play session.",
       "notes": "Not related to the boycott: the same result with the boycott bit on and off. Europe stops use a different load path (0x4124F) and are not touched."
     },
     {

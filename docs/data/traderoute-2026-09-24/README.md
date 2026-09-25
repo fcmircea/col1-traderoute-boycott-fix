@@ -10,12 +10,16 @@ DS:0x84BC weight row for the unit's nation. The first line is the table search.
 
 | file | EXE | save change |
 |---|---|---|
-| boy.log | boycott patch | none (sugar boycotted) |
-| nob.log | boycott patch | sugar boycott bit off (file 0x2CF8: 0x73 -> 0x71) |
-| C.log | boycott patch | stop 1 loads nothing |
-| D.log | boycott patch | stop 1 loads cotton, Santo Domingo cotton = 40 |
-| X.log | boycott + topup | none |
-| E.log | boycott + topup | stop 1 loads horses (fills both holds) |
-| XL.log | boycott + topup | none, 1200 s |
+| boy.txt | boycott patch | none (sugar boycotted) |
+| nob.txt | boycott patch | sugar boycott bit off (file 0x2CF8: 0x73 -> 0x71) |
+| C.txt | boycott patch | stop 1 loads nothing |
+| D.txt | boycott patch | stop 1 loads cotton, Santo Domingo cotton = 40 |
+| X.txt | boycott + topup | none |
+| E.txt | boycott + topup | stop 1 loads horses (fills both holds) |
+| XL.txt | boycott + topup | none, 1200 s |
+| W0.txt | boycott patch | unit 1 made a wagon train; land route: load cotton at Isabella, load cotton at Veracruz; Isabella cotton 105, Veracruz cotton 60; unit +0x17 = 0x00 |
+| W1.txt | boycott + topup | same save as W0 |
+
+W0/W1 lines print cotton, not sugar (`DECODE_ARGS="--colonies 4,19 --good 3"`).
 
 The save and the game files are not in this repository.
