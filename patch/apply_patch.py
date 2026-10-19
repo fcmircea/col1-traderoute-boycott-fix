@@ -9,8 +9,8 @@ this tool.
     python3 apply_patch.py VICEROY.EXE --list
     python3 apply_patch.py VICEROY.EXE --status
     python3 apply_patch.py VICEROY.EXE --all
-    python3 apply_patch.py VICEROY.EXE traderoute-boycott
-    python3 apply_patch.py VICEROY.EXE traderoute-boycott --revert
+    python3 apply_patch.py VICEROY.EXE traderoute-topup
+    python3 apply_patch.py VICEROY.EXE traderoute-topup --revert
 
 Safety rules:
   * Every byte at every patch site is checked before anything is written.

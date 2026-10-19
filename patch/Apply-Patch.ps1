@@ -17,8 +17,8 @@ Exit codes:
   .\Apply-Patch.ps1 "D:\Games\Games\MPS\COLONIZE\VICEROY.EXE" -List
   .\Apply-Patch.ps1 "...\VICEROY.EXE" -Status
   .\Apply-Patch.ps1 "...\VICEROY.EXE" -All
-  .\Apply-Patch.ps1 "...\VICEROY.EXE" traderoute-boycott
-  .\Apply-Patch.ps1 "...\VICEROY.EXE" traderoute-boycott -Revert
+  .\Apply-Patch.ps1 "...\VICEROY.EXE" traderoute-topup
+  .\Apply-Patch.ps1 "...\VICEROY.EXE" traderoute-topup -Revert
 #>
 [CmdletBinding()]
 param(
