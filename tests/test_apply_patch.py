@@ -30,6 +30,8 @@ PRISTINE = os.environ.get("COL1_PRISTINE_EXE")
 HAVE_PRISTINE = bool(PRISTINE) and Path(PRISTINE).is_file()
 # What --all applies to the real manifest.
 RECOMMENDED = {p["id"] for p in REAL_MANIFEST["patches"] if p["status"] == "recommended"}
+# The first boycott fix (Aug 2026, withdrawn 2026-10): file offset and bytes.
+OLD_BOYCOTT = (0x4121A, b"\x90\x90")
 
 
 def md5(b: bytes) -> str:
@@ -134,9 +136,9 @@ class PatcherTests:
     def test_apply_by_id_then_revert(self):
         orig = fake_exe(REAL_MANIFEST)
         self.exe.write_bytes(orig)
-        self.assertEqual(self.run_tool(["traderoute-boycott"])[0], 0)
+        self.assertEqual(self.run_tool(["traderoute-topup"])[0], 0)
         self.assertNotEqual(self.exe.read_bytes(), orig)
-        self.assertEqual(self.run_tool(["traderoute-boycott"], revert=True)[0], 0)
+        self.assertEqual(self.run_tool(["traderoute-topup"], revert=True)[0], 0)
         self.assertEqual(self.exe.read_bytes(), orig)
 
     def test_second_apply_is_noop_and_makes_no_backup(self):
@@ -217,7 +219,7 @@ class PatcherTests:
 
     def test_all_plus_ids_refused(self):
         self.exe.write_bytes(fake_exe(REAL_MANIFEST))
-        self.assertEqual(self.run_tool(["traderoute-boycott"], all=True)[0], 2)
+        self.assertEqual(self.run_tool(["traderoute-topup"], all=True)[0], 2)
 
     # ---- status / list ----------------------------------------------------------
 
@@ -248,17 +250,18 @@ class PatcherTests:
         self.assertEqual(self.exe.read_bytes(), fake_exe(m, applied=RECOMMENDED))
         self.assertIn("exp-a", out)
 
-    def test_old_boycott_blocks_v2(self):
-        # traderoute-boycott (v1) and the v2 pair share no bytes, but both at
-        # once would sell boycotted goods in Europe again: --all must refuse.
-        orig = fake_exe(REAL_MANIFEST, applied={"traderoute-boycott"})
-        self.exe.write_bytes(orig)
+    def test_withdrawn_boycott_fix_refused(self):
+        # The first boycott fix (0x4121A 75DA -> 9090) is no longer listed.
+        # v2's site covers those bytes, so an EXE that has it is refused
+        # (exit 3, nothing written) instead of getting v2 on top of it.
+        data = bytearray(fake_exe(REAL_MANIFEST))
+        data[OLD_BOYCOTT[0]:OLD_BOYCOTT[0] + 2] = OLD_BOYCOTT[1]
+        self.exe.write_bytes(bytes(data))
         rc, _, err = self.run_tool(all=True)
-        self.assertEqual(rc, 5, err)
-        self.assertEqual(self.exe.read_bytes(), orig)
-        self.assertEqual(self.run_tool(["traderoute-boycott"], revert=True)[0], 0)
-        self.assertEqual(self.run_tool(all=True)[0], 0)
-        self.assertEqual(self.exe.read_bytes(), fake_exe(REAL_MANIFEST, applied=RECOMMENDED))
+        self.assertEqual(rc, 3, err)
+        self.assertIn("0x41215", err)
+        self.assertEqual(self.exe.read_bytes(), bytes(data))
+        self.assertEqual(self.baks(), [])
 
     def test_experimental_applies_when_named(self):
         m = synthetic_manifest()
@@ -298,7 +301,7 @@ class PatcherTests:
     def test_revert_all_includes_experimental(self):
         m = synthetic_manifest()
         self.use_manifest(m)
-        self.exe.write_bytes(fake_exe(m, applied={"traderoute-boycott", "exp-a"}))
+        self.exe.write_bytes(fake_exe(m, applied={"traderoute-topup", "exp-a"}))
         self.assertEqual(self.run_tool(all=True, revert=True)[0], 0)
         self.assertEqual(self.exe.read_bytes(), fake_exe(m))
 
@@ -313,17 +316,17 @@ class PatcherTests:
 
     def test_manifest_missing_status_rejected(self):
         m = copy.deepcopy(REAL_MANIFEST)
-        del by_id(m, "traderoute-boycott")["status"]
+        del by_id(m, "traderoute-topup")["status"]
         self.assert_manifest_rejected(m)
 
     def test_manifest_unknown_status_rejected(self):
         m = copy.deepcopy(REAL_MANIFEST)
-        by_id(m, "traderoute-boycott")["status"] = "maybe"
+        by_id(m, "traderoute-topup")["status"] = "maybe"
         self.assert_manifest_rejected(m)
 
     def test_manifest_length_mismatch_rejected(self):
         m = copy.deepcopy(REAL_MANIFEST)
-        by_id(m, "traderoute-boycott")["patched"] = "90"
+        by_id(m, "traderoute-topup")["patched"] = "90"
         self.assert_manifest_rejected(m)
 
     def test_manifest_overlap_without_conflict_rejected(self):
@@ -473,7 +476,8 @@ class RealBinaryStaticTests(unittest.TestCase):
     def test_boycott_and_idle_stir_match_live_install(self):
         # boycott + idle-stir is what Florin's install ran on 2026-09-23.
         d = bytearray(self.data)
-        for pid in ("traderoute-boycott", "rng-idle-stir"):
+        d[OLD_BOYCOTT[0]:OLD_BOYCOTT[0] + 2] = OLD_BOYCOTT[1]
+        for pid in ("rng-idle-stir",):
             p = by_id(REAL_MANIFEST, pid)
             off = int(p["offset"], 16)
             new = bytes.fromhex(p["patched"])
@@ -536,7 +540,8 @@ class RealBinaryStaticTests(unittest.TestCase):
     def test_boycott_and_topup_match_qemu_test_exe(self):
         # boycott + topup is the EXE measured in QEMU on 2026-09-24 (run X).
         d = bytearray(self.data)
-        for pid in ("traderoute-boycott", "traderoute-topup"):
+        d[OLD_BOYCOTT[0]:OLD_BOYCOTT[0] + 2] = OLD_BOYCOTT[1]
+        for pid in ("traderoute-topup",):
             p = by_id(REAL_MANIFEST, pid)
             off = int(p["offset"], 16)
             new = bytes.fromhex(p["patched"])

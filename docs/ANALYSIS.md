@@ -132,7 +132,8 @@ unload machinery through *different* callers and are not touched; that was
 confirmed in play. **But the same loop also serves a route's Europe stop**, and
 there the skip is correct. This NOP removed it too, so a route ship sold
 boycotted goods in London. It was replaced by `traderoute-boycott-v2` in
-October 2026; see "skip_test, and the v2 fix" below.
+October 2026 and removed from `patches.json`; see "skip_test, and the v2 fix"
+below.
 
 ## Corroboration
 

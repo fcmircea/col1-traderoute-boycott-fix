@@ -9,10 +9,9 @@ Each one was found by runtime measurement, not by guessing.
 | `traderoute-boycott-v2` (+ `-tail`) | `0x41215`, `0x428C6` | **recommended** | trade routes silently refuse to deliver boycotted goods to a colony |
 | `traderoute-topup` | `0x41384` | **recommended** | a later pick-up stop on a route loads nothing when every hold is in use, even part-full |
 | `rng-idle-stir` | `0xC2FD` | **recommended** | the RNG is reset to the clock about 18 times a second, so battles close in time draw nearly the same number |
-| `traderoute-boycott` | `0x4121A` | experimental, superseded | the first fix; also lets a route sell boycotted goods in Europe |
 
-`--all` applies only **recommended** patches. You have to name an
-experimental patch to apply it.
+Start from the original `VICEROY.EXE`. `--all` applies every **recommended**
+patch (today: all of them).
 
 ## Apply
 
@@ -110,17 +109,23 @@ and `traderoute-boycott-v2-tail`; `--all` applies both.
 | original + v2 pair | `8610ad255a2940448439d63b87e931bd` |
 | original + all recommended (v2 pair, topup, idle-stir) | `1905cb45ddc4ad95a8497e50a0276d8e` |
 
-## The old patch (`traderoute-boycott`, superseded)
+## The first fix (withdrawn)
 
-Until October 2026 this repository recommended one change, `0x4121A`
-`75 DA` → `90 90`, which removes the skip everywhere. It fixes colony
-deliveries, but a route's Europe stop then **sells boycotted goods**. If you
-applied it, revert it first; the patchers refuse to mix it with v2:
+From August to October 2026 this repository recommended one change,
+`0x4121A` `75 DA` → `90 90`, which removes the skip everywhere. It fixes
+colony deliveries, but a route's Europe stop then **sells boycotted goods**.
+It is no longer in `patches.json`.
+
+If you applied it, go back to the original first. The patcher kept it as
+`VICEROY.EXE.0f5d5b00.bak` next to the game:
 
 ```
-python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE traderoute-boycott --revert
+copy VICEROY.EXE.0f5d5b00.bak VICEROY.EXE
 python3 patch/apply_patch.py /path/to/COLONIZE/VICEROY.EXE --all
 ```
+
+v2's check covers the bytes the first fix changed, so on an EXE that still
+has it the patchers refuse (exit 3) and write nothing.
 
 ## What has been verified
 
@@ -195,7 +200,7 @@ games, no hang.
 | | MD5 |
 |---|---|
 | original + `traderoute-topup` only | `f5399c8b96e37bd5b3c778fbae781b25` |
-| original + `traderoute-boycott` + `traderoute-topup` | `f827c0bdd89a27de811941315b027c14` |
+| original + the first boycott fix + `traderoute-topup` (QEMU test EXE) | `f827c0bdd89a27de811941315b027c14` |
 
 ---
 

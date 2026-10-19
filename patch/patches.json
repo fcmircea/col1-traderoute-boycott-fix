@@ -8,39 +8,19 @@
   },
   "patches": [
     {
-      "id": "traderoute-boycott",
-      "title": "Trade routes deliver boycotted goods again",
-      "status": "experimental",
-      "offset": "0x4121A",
-      "original": "75da",
-      "patched": "9090",
-      "asm_before": "jne 0x411F6",
-      "asm_after": "nop / nop",
-      "md5_alone": "d60ddedbfa17f7058cdbe2bb3873b39e",
-      "conflicts": [
-        "traderoute-boycott-v2",
-        "traderoute-boycott-v2-tail"
-      ],
-      "summary": "Removes the per-cargo skip branch in the carrier unload loop, so an automated trade route no longer refuses to deliver goods boycotted in Europe. Superseded by traderoute-boycott-v2: this version removes the skip at Europe stops too.",
-      "verified": "50+ turns in DOSBox-Daum; manual Europe sales and Custom House unaffected; 5-stop/7-cargo route delivers correctly. A route Europe stop was not tested then.",
-      "caveat": "Superseded. A route with a Europe stop also SELLS goods that are boycotted (QEMU 2026-10-19, docs/ANALYSIS.md). Revert it, then apply traderoute-boycott-v2 and traderoute-boycott-v2-tail."
-    },
-    {
       "id": "traderoute-boycott-v2",
       "title": "Trade routes deliver boycotted goods to colonies (Europe stops still respect the boycott)",
       "status": "recommended",
       "offset": "0x41215",
-      "original": "83c402",
-      "patched": "e9ae16",
-      "asm_before": "add sp,2",
-      "asm_after": "jmp 0x428C6 (traderoute-boycott-v2-tail)",
+      "original": "83c4020bc075da",
+      "patched": "e9ae160bc075da",
+      "asm_before": "add sp,2 / or ax,ax / jne 0x411F6",
+      "asm_after": "jmp 0x428C6 (traderoute-boycott-v2-tail) / or ax,ax / jne 0x411F6 (unchanged)",
       "md5_alone": "0493166c44267a11fc431f9719a350c6",
-      "conflicts": [
-        "traderoute-boycott"
-      ],
+      "conflicts": [],
       "summary": "The unload loop asks skip_test (overlay 4, file 0x30B38) whether the good is boycotted for the CURRENT nation. The route code selects the ship's nation only at a Europe stop, so at a colony stop the test reads whichever nation was selected last and can refuse the delivery. This patch jumps to a 9-byte tail that keeps the skip only when the stop is Europe (999).",
-      "caveat": "Needs traderoute-boycott-v2-tail: alone it jumps into empty bytes. Conflicts with the old traderoute-boycott; revert that first.",
-      "notes": "The MZ relocation word of the lcall at 0x41213 is not touched; overlay 8 has no relocation in 0x41215-0x41217."
+      "caveat": "Needs traderoute-boycott-v2-tail: alone it jumps into empty bytes. Start from the pristine EXE. The site includes 0x4121A, so an EXE with the first boycott fix (0x4121A 75DA -> 9090, withdrawn 2026-10) is refused as unexpected bytes: restore VICEROY.EXE.0f5d5b00.bak first.",
+      "notes": "Only the first 3 bytes change; the last 4 are checked so that the withdrawn 0x4121A fix cannot be stacked under v2. The MZ relocation word of the lcall at 0x41213 is not touched; overlay 8 has no relocation in 0x41215-0x4121B."
     },
     {
       "id": "traderoute-boycott-v2-tail",
@@ -52,9 +32,7 @@
       "asm_before": "(zero padding at the end of overlay 8)",
       "asm_after": "pop cx / shr ax,cl / and al,[bp-17h] / jmp 0x41218",
       "md5_alone": "ecdd50c8d70bd187d2fe32b94546eb5e",
-      "conflicts": [
-        "traderoute-boycott"
-      ],
+      "conflicts": [],
       "summary": "ax = 1 if the good is boycotted, then AND with the high byte of the stop number (03h for Europe = 999, 00h for a colony); back to the original 'or ax,ax / jne skip' at 0x41218.",
       "caveat": "Only with traderoute-boycott-v2. Uses 9 of the 11 zero bytes at the end of overlay 8 (header 0x400F0, 0x27E paragraphs, ends at 0x428D0); no relocation there.",
       "notes": "Alone it is never reached and changes nothing."
