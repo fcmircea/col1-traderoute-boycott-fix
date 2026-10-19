@@ -28,6 +28,8 @@ REAL_MANIFEST = json.loads((PATCH_DIR / "patches.json").read_text(encoding="utf-
 SIZE = REAL_MANIFEST["target"]["size"]
 PRISTINE = os.environ.get("COL1_PRISTINE_EXE")
 HAVE_PRISTINE = bool(PRISTINE) and Path(PRISTINE).is_file()
+# What --all applies to the real manifest.
+RECOMMENDED = {p["id"] for p in REAL_MANIFEST["patches"] if p["status"] == "recommended"}
 
 
 def md5(b: bytes) -> str:
@@ -127,7 +129,7 @@ class PatcherTests:
         self.exe.write_bytes(fake_exe(REAL_MANIFEST))
         rc, out, err = self.run_tool(all=True)
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.exe.read_bytes(), fake_exe(REAL_MANIFEST, applied={"traderoute-boycott"}))
+        self.assertEqual(self.exe.read_bytes(), fake_exe(REAL_MANIFEST, applied=RECOMMENDED))
 
     def test_apply_by_id_then_revert(self):
         orig = fake_exe(REAL_MANIFEST)
@@ -138,7 +140,7 @@ class PatcherTests:
         self.assertEqual(self.exe.read_bytes(), orig)
 
     def test_second_apply_is_noop_and_makes_no_backup(self):
-        self.exe.write_bytes(fake_exe(REAL_MANIFEST, applied={"traderoute-boycott"}))
+        self.exe.write_bytes(fake_exe(REAL_MANIFEST, applied=RECOMMENDED))
         rc, out, _ = self.run_tool(all=True)
         self.assertEqual(rc, 0)
         self.assertIn("Nothing to do", out)
@@ -176,11 +178,11 @@ class PatcherTests:
 
     def test_unexpected_bytes_refused_and_nothing_written(self):
         data = bytearray(fake_exe(REAL_MANIFEST))
-        data[0x4121A] = 0x11
+        data[0x41384] = 0x11                    # traderoute-topup site, 74 03
         self.exe.write_bytes(bytes(data))
         rc, _, err = self.run_tool(all=True)
         self.assertEqual(rc, 3)
-        self.assertIn("11da", err)
+        self.assertIn("1103", err)
         self.assertEqual(self.exe.read_bytes(), bytes(data))
         self.assertEqual(self.baks(), [])
 
@@ -243,8 +245,20 @@ class PatcherTests:
         self.exe.write_bytes(fake_exe(m))
         rc, out, _ = self.run_tool(all=True)
         self.assertEqual(rc, 0)
-        self.assertEqual(self.exe.read_bytes(), fake_exe(m, applied={"traderoute-boycott"}))
+        self.assertEqual(self.exe.read_bytes(), fake_exe(m, applied=RECOMMENDED))
         self.assertIn("exp-a", out)
+
+    def test_old_boycott_blocks_v2(self):
+        # traderoute-boycott (v1) and the v2 pair share no bytes, but both at
+        # once would sell boycotted goods in Europe again: --all must refuse.
+        orig = fake_exe(REAL_MANIFEST, applied={"traderoute-boycott"})
+        self.exe.write_bytes(orig)
+        rc, _, err = self.run_tool(all=True)
+        self.assertEqual(rc, 5, err)
+        self.assertEqual(self.exe.read_bytes(), orig)
+        self.assertEqual(self.run_tool(["traderoute-boycott"], revert=True)[0], 0)
+        self.assertEqual(self.run_tool(all=True)[0], 0)
+        self.assertEqual(self.exe.read_bytes(), fake_exe(REAL_MANIFEST, applied=RECOMMENDED))
 
     def test_experimental_applies_when_named(self):
         m = synthetic_manifest()
@@ -348,7 +362,7 @@ class PatcherTests:
         exe.write_bytes(fake_exe(REAL_MANIFEST))
         rc, _, err = self.run_tool(all=True, exe=exe)
         self.assertEqual(rc, 0, err)
-        self.assertEqual(exe.read_bytes(), fake_exe(REAL_MANIFEST, applied={"traderoute-boycott"}))
+        self.assertEqual(exe.read_bytes(), fake_exe(REAL_MANIFEST, applied=RECOMMENDED))
 
     def test_no_temp_files_left_behind(self):
         self.exe.write_bytes(fake_exe(REAL_MANIFEST))
@@ -465,6 +479,59 @@ class RealBinaryStaticTests(unittest.TestCase):
             new = bytes.fromhex(p["patched"])
             d[off:off + len(new)] = new
         self.assertEqual(md5(bytes(d)), "7289494e2ba2561792092a5918d075bd")
+
+    def test_recommended_set_matches_play_exe(self):
+        # --all applies every recommended patch: since 2026-10-19 the v2
+        # boycott pair, topup and idle-stir (QEMU-tested as play/re-skiptest/v2).
+        rec = [p for p in REAL_MANIFEST["patches"] if p["status"] == "recommended"]
+        self.assertEqual(sorted(p["id"] for p in rec),
+                         ["rng-idle-stir", "traderoute-boycott-v2", "traderoute-boycott-v2-tail",
+                          "traderoute-topup"])
+        d = bytearray(self.data)
+        for p in rec:
+            off = int(p["offset"], 16)
+            new = bytes.fromhex(p["patched"])
+            d[off:off + len(new)] = new
+        self.assertEqual(md5(bytes(d)), "1905cb45ddc4ad95a8497e50a0276d8e")
+
+    def overlays(self):
+        """(header, code start, end, relocated file offsets) for each overlay.
+
+        The overlays follow the MZ image, one after another. Header words:
+        w0 = size in paragraphs (header included), w1 = header paragraphs,
+        w2 = 0x2BC, w4 = relocation count; (offset, segment) pairs follow.
+        """
+        d = self.data
+        pages, last = int.from_bytes(d[4:6], "little"), int.from_bytes(d[2:4], "little")
+        h = (pages * 512 - ((512 - last) if last else 0) + 15) // 16 * 16
+        out = []
+        while h + 16 <= len(d) and int.from_bytes(d[h + 4:h + 6], "little") == 0x2BC:
+            size, hdr, count = (int.from_bytes(d[h + k:h + k + 2], "little") for k in (0, 2, 8))
+            code = h + hdr * 16
+            relocs = set()
+            for i in range(count):
+                off = int.from_bytes(d[h + 16 + 4 * i:h + 18 + 4 * i], "little")
+                seg = int.from_bytes(d[h + 18 + 4 * i:h + 20 + 4 * i], "little")
+                relocs.add(code + seg * 16 + off)
+            out.append((h, code, h + size * 16, relocs))
+            h += size * 16
+        return out
+
+    def test_overlay_patch_sites_avoid_relocations(self):
+        # The overlay manager rewrites relocated words when it loads an
+        # overlay, like the DOS loader does for the MZ image.
+        ovs = self.overlays()
+        self.assertEqual(len(ovs), 31)
+        for p in REAL_MANIFEST["patches"]:
+            off = int(p["offset"], 16)
+            end = off + len(bytes.fromhex(p["original"]))
+            if off < ovs[0][0]:
+                continue                       # resident: see the MZ test above
+            ov = [o for o in ovs if o[0] <= off < o[2]]
+            self.assertEqual(len(ov), 1, p["id"])
+            _, code, ov_end, relocs = ov[0]
+            self.assertTrue(code <= off and end <= ov_end, p["id"])
+            self.assertEqual([w for w in relocs if w < end and w + 2 > off], [], p["id"])
 
     def test_boycott_and_topup_match_qemu_test_exe(self):
         # boycott + topup is the EXE measured in QEMU on 2026-09-24 (run X).

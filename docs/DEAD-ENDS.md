@@ -25,9 +25,11 @@ scanning for the word preceded by `01 00` (signature `01 00 7F 18`). Its address
 moves with DOS memory layout — notably, loading a mouse driver shifts it — so it
 must be re-located every run.
 
-Watching that word is also a disappointment: it is read exactly **once**, at
-load time, by a `rep movsw` at file `0x10374` copying the record. The gameplay
-code works from derived state thereafter.
+Watching that word is also a disappointment: in that run it was read exactly
+**once**, at load time, by a `rep movsw` at file `0x10374` copying the record.
+(Correction, 2026-10-19: `skip_test` reads the nation record's `+0x20` on every
+colony-stop unload, at the copy that `DS:84FC` points to. The earlier watch was
+probably on another copy; not re-checked.)
 
 ## `0x6E43B` in the route processor — tested, does not fix the bug
 
@@ -52,18 +54,18 @@ It was built (`23 16 54 1F` → `31 D2 90 90`, i.e. `xor dx,dx; nop; nop`) and
 tested against the reproduction save. **The drop-off still failed.** This
 routine is not on the arrival-unload path.
 
-## Do not patch the handler-side gate at `0x2A786`
+## Do not patch the handler-side branch at `0x2A786`
 
 Inside the unload routine, the third parameter selects two paths:
 
-- `[bp+0xA] == 0` → domestic deposit, reaching the store at `0x2A874`
-- `[bp+0xA] != 0` → sale/market path, which contains a boycott gate at
-  `0x2A781` / `0x2A786` / `0x2A78A`
+- `[bp+0xA] == 0` → deposit everything, reaching the store at `0x2A874`
+- `[bp+0xA] != 0` → ask the player how much (key HOWMUCH2 at `DS:0CCD`, then
+  the number dialog), at `0x2A781` / `0x2A786` / `0x2A78A`
 
-Neutralising that gate would "fix" the symptom while allowing boycotted goods to
-be **sold in Europe**, and would likely disturb the Custom House. That is a worse
-bug than the one being fixed and a much quieter one. Leave it alone; patch the
-caller instead.
+An earlier reading took this branch for a sale/boycott gate. It is not: the
+boycott test is `skip_test` in the caller (see `docs/ANALYSIS.md`). Changing
+the branch does not touch the bug and would bring up the prompt on a route.
+Patch the caller instead.
 
 ## The caller cannot be found by unwinding the stack
 

@@ -1,7 +1,8 @@
 # RNG analysis: `rng-idle-stir`
 
-Status: **experimental**. The static checks and the emulator measurements below
-were reproduced on 2026-09-23. The play checks are still open (see the end).
+Status: **recommended** (2026-10-19). The static checks and the emulator
+measurements below were reproduced on 2026-09-23; the play checks passed in
+October 2026 (see the end).
 
 ## The generator
 
@@ -126,12 +127,15 @@ The 2004 CivFanatics fix (as described in the August notes; not re-checked)
 returns one instruction earlier (`0x103C8: A3 EE → 5D CB`), which makes
 `srand()` do nothing. That fits the report that it generates the same map every time.
 
-## Still open (play checks)
+## Play checks (passed)
 
 The claim that seeded content is unchanged follows from `srand()` being
 byte-identical. That is strong evidence, but it is not the same as having
-played it. Before this patch becomes *recommended*, check in play:
+played it. So these were checked in play:
 
 1. The colony screen layout stays the same across visits.
 2. A village teaches the same skill from turn to turn.
 3. Two new worlds generated one after the other are different.
+
+All three held over many games in DOSBox-Daum in October 2026 (Florin, on the
+Romanian build, which carries this patch).

@@ -127,10 +127,12 @@ message.
 
 The loop stops skipping items and the unload proceeds.
 
-This is caller-side, which is what makes it safe. The European sale path and the
-Custom House reach the unload machinery through *different* callers and are not
-touched. That was confirmed in play: selling a boycotted good in Europe is still
-refused, and the Custom House still behaves as designed.
+This is caller-side. The manual European sale and the Custom House reach the
+unload machinery through *different* callers and are not touched; that was
+confirmed in play. **But the same loop also serves a route's Europe stop**, and
+there the skip is correct. This NOP removed it too, so a route ship sold
+boycotted goods in London. It was replaced by `traderoute-boycott-v2` in
+October 2026; see "skip_test, and the v2 fix" below.
 
 ## Corroboration
 
@@ -149,7 +151,7 @@ which is never raised on the automated path — hence the silence.
 | Route-stop function | `0x41080` | `[bp+6]` = unit index |
 | Unload loop start | `0x411D8` | `i = 0` |
 | `unload_list_get(i)` | `0x41204` | `lcall 1a1f:021c` |
-| `skip_test(good)` | `0x41210` | `lcall 191f:0cd8` — not positively identified |
+| `skip_test(good)` | `0x41210` | `lcall 191f:0cd8` = overlay 4 offset `05E8`, file `0x30B38` (see below) |
 | `find_hold(unit, good)` | `0x41222` | `lcall 181f:0c2c`, < 0 = none |
 | `unload(unit, good, 0)`, colony | `0x411E8` | `lcall 191f:0594` |
 | Unload to Europe | `0x41240` | `lcall 191f:0d02` |
@@ -159,7 +161,7 @@ which is never raised on the automated path — hence the silence.
 | Unit table | `DS:0x3144` | 28 bytes per unit, holds used at `+0x0C` |
 | Unload routine entry | `0x2A6A6` | `enter 0xe,0`, far, `retf` |
 | **Deposit store** | `0x2A874` | `add [bx+si+0x9A], ax` |
-| Unload sale/boycott gate | `0x2A781`, `0x2A786` | **do not patch** — this is the sell path |
+| Unload "how much?" prompt | `0x2A781`, `0x2A786` | third argument: ask the amount (HOWMUCH2); not a boycott gate |
 | Fur production writer | overlay `IP=0x09A2` | colony output, not cargo |
 | Load-time nation-record copy | `0x10374` | `rep movsw` |
 | `SOMEBOYCOTT` message key string | `0x1E9C7` | |
@@ -242,19 +244,103 @@ Runs X and E show that `07f8` fills up a part-full hold of the same good,
 and returns non-zero when nothing more fits. So the loop ends by itself once
 the gate is gone.
 
-### The fix (experimental)
+### The fix (recommended)
 
 ```
 0x41384:  74 03   je 0x41389     ->   90 90   nop / nop
 ```
 
-Not yet tested: a long play session in a real game (DOSBox).
+Play-checked in October 2026: many long games with trade routes in
+DOSBox-Daum, no hang.
 
-## Open question
+## Overlays and thunks
 
-`skip_test` (`191f:0cd8`) has not been positively identified. It is reached
-through an overlay thunk table with its own load base, so resolving it from the
-resident base lands in string data. Behaviourally the patch is correct under
-testing — including a 5-stop route with 7 cargo types, which delivers each good
-only to the stops configured for it — but naming that function precisely is
-unfinished business. If you can, please open an issue.
+The resident image ends at file `0x20665`. 31 overlays follow, one after
+another. Each starts with a 16-byte header: `w0` = size in paragraphs (header
+included), `w1` = header size in paragraphs, `w2` = `0x2BC`, `w4` = relocation
+count. The relocation table follows the header; the code starts at
+header + `w1`·16. The route code is overlay 8 (header `0x400F0`, code
+`0x404B0`, ends `0x428D0`).
+
+A thunk is 12 bytes: `9A AB 0D 0D 11` (call the overlay manager at
+`110D:0DAB`), `EA <offset> 00 00`, then the overlay number. The thunk
+`191F:0CD8` (file `0x1C2C8`) reads `… EA E8 05 00 00 04 00`: overlay 4, offset
+`05E8`.
+
+## skip_test, and the v2 fix
+
+`skip_test` is overlay 4 offset `05E8`, file `0x30B38`:
+
+```
+0x30B3B:  mov  ax, 1
+0x30B3E:  mov  cl, [bp+6]               ; good
+0x30B41:  shl  ax, cl                   ; 1 << good
+0x30B43:  mov  bx, [0x84FC]             ; the "current" nation record
+0x30B47:  and  ax, [bx+0x20]            ; its boycott bitmap
+0x30B4B:  retf
+```
+
+`DS:84FC` is written only by overlay 4 offset `0000` (file `0x30550`):
+`[9E12] = n; [84FC] = 0x8808 + n*0x13C`. So it tests the boycott bit of
+whichever nation was **selected last**. The route function selects the
+unit's own nation only on the Europe branch (`0x4119A`: stop == 999, then the
+call at `0x411AD`). At a colony stop it does not, so the test reads a stale
+nation. That is the original bug: a colony delivery is refused when the last
+selected nation has the good boycotted.
+
+Proof (QEMU, 2026-10-19): `EB FE` at `0x30B38` hung at
+`995B:05E8` while an English wagon unloaded at Jamestown; at that moment
+`[84FC]` pointed at the Dutch record. With the pristine EXE the same wagon
+delivered furs and cotton that were boycotted for England.
+
+The manual `U` unload calls `skip_test` only on its Europe path (`0x4159D`).
+So MicroProse meant the check for Europe only.
+
+**v1 went too far.** With `0x4121A` NOPed, a route's Europe stop also stops
+skipping. Test with a caravel on a route whose stop is Europe, carrying
+100 furs (boycotted for England) and 100 sugar:
+
+| build | furs | gold |
+|---|---|---|
+| pristine | stay on board | 4612 → 4792 (sugar only) |
+| v1 (`0x4121A` NOP) | **sold** | 4612 → 4882 |
+| v2 | stay on board | 4612 → 4792 |
+
+No build hung. The boycott word stayed `0xD979` in all.
+
+**v2** keeps the skip at Europe stops only. Two sites, no relocation word
+in either (overlay 8 has 228; none there):
+
+```
+0x41215:  83 C4 02            add sp,2   ->  E9 AE 16   jmp 0x428C6
+0x428C6:  00 x 9  (end of overlay 8)     ->  59         pop cx         ; cx = good
+                                             D3 E8      shr ax,cl      ; 1 if boycotted
+                                             22 46 E9   and al,[bp-17h]; high byte of stop:
+                                                                        ; 03h Europe, 00h colony
+                                             E9 49 E9   jmp 0x41218
+0x41218:  or ax,ax / jne 0x411F6         (unchanged: skip when ax != 0)
+```
+
+Measured with v2 alone and with v2 + topup + idle-stir: the Europe stop keeps
+the boycotted furs and sells the sugar (gold +180 only); at a colony stop,
+with the stale nation's bitmap set so that pristine refuses, the wagon
+delivers (cotton 0 → 5, furs 62 → 77). The 9 bytes are in RAM at overlay 8
+offset `0x2416` in every run. Not yet tested: DOSBox and a long game.
+
+## A route unload ignores the colony's storage (vanilla)
+
+Players see a route dump goods into a full colony; the excess spoils at the end
+of the turn. This is the original game, not one of these patches.
+
+- Capacity is file `0x8D00` (thunk `181F:0D3A`): 100 if colony byte `+0x95`
+  (warehouse level) is 0, else (level + 1) × 100.
+- The unload routine (`0x2A6A6`) compares stock + amount with capacity at
+  `0x2A7DB`, but it only warns, and only when the good is not food and
+  `DS:0890` is set. `0890` is set only inside the colony screen (`0x2C60F`),
+  so it is 0 on a route. Then everything is deposited.
+- Runtime: Jamestown furs set to 195 (capacity 200), a route unload made it
+  210 with no prompt.
+- The manual `U` unload shows WAREHOUSEFULL ("Unload anyway") but does not cap
+  the amount either.
+
+A cap would be a new patch (about 50 bytes in three places); not built.
